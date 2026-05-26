@@ -1,0 +1,385 @@
+---
+title: "Student Academic Performance Analysis"
+author: "Thuc Cao"
+date: "`r Sys.Date()`"
+output:
+  html_notebook:
+    toc: true
+    toc_float: true
+    number_sections: true
+    theme: flatly
+    highlight: tango
+---
+
+```{r setup, include=FALSE}
+# Load required libraries
+library(tidyverse)  # Data wrangling (dplyr, ggplot2, readr, tidyr)
+library(knitr)      # Table formatting
+library(DT)         # Interactive HTML tables
+library(plotly)     # Interactive plots
+library(janitor)    # Column name standardization
+
+knitr::opts_chunk$set(
+  echo    = TRUE,
+  message = FALSE,
+  warning = FALSE,
+  fig.align = "center"
+)
+```
+
+---
+
+## Introduction
+
+This report presents a structured analysis of the `moody2022.csv` dataset, with the objective of identifying factors associated with student academic performance. The analysis examines relationships between student major, seniority level, letter grade, and two key performance metrics — `score` and `gpa`.
+
+The workflow progresses through four stages:
+
+1. **Data Preparation** — loading, cleaning, and type-casting
+2. **Feature Engineering** — constructing an at-risk flag and GPA performance tiers
+3. **Exploratory Data Analysis** — summary tables and distributional investigation
+4. **Visualization** — interactive plots revealing cross-group performance patterns
+
+The findings are intended to produce actionable insights that may inform academic advising and departmental resource allocation.
+
+---
+
+## Data Loading and Preparation
+
+The dataset is loaded, column names are standardized, and records with missing values in key performance fields are removed. Categorical variables are then cast as ordered factors to ensure correct sequencing in visualizations and downstream analyses.
+
+```{r load-and-clean-data}
+# Load the dataset
+df <- read_csv("../data/moody2022.csv")
+
+# Standardize column names (e.g., "Major" -> "major") and drop NA rows
+df <- df %>%
+  janitor::clean_names() %>%
+  drop_na(score, gpa, grade)
+
+# Print dataset dimensions and structure
+cat("Dataset dimensions:", nrow(df), "rows x", ncol(df), "columns\n\n")
+glimpse(df)
+```
+
+A statistical summary of the cleaned dataset is generated to inspect distributional properties before analysis.
+
+```{r data-summary}
+summary(df)
+```
+
+`seniority` and `grade` are converted to ordered factors to enforce chronological and academic ordering in all subsequent plots and tables.
+
+```{r factor-ordering}
+# Chronological ordering for seniority
+df$seniority <- factor(df$seniority,
+                       levels = c("Freshman", "Sophomore", "Junior", "Senior"))
+
+# Descending academic performance ordering for grade
+df$grade <- factor(df$grade,
+                   levels = c("A", "B", "C", "D", "F"))
+```
+
+---
+
+## Feature Engineering
+
+Two derived variables are constructed to enhance the analytical framework.
+
+- **`at_risk`**: Flags students simultaneously below the passing score threshold (`score < 50`) *and* below a satisfactory GPA (`gpa < 2.0`). Students meeting both criteria may warrant targeted academic intervention.
+- **`gpa_tier`**: Partitions GPA into four performance bands, enabling group-level comparisons that complement the continuous GPA metric.
+
+```{r feature-engineering}
+df <- df %>%
+  mutate(
+    # At-risk: failing both score and GPA thresholds simultaneously
+    at_risk = if_else(score < 50 & gpa < 2.0, TRUE, FALSE),
+
+    # GPA performance tiers
+    gpa_tier = cut(
+      gpa,
+      breaks        = c(0, 2.0, 3.0, 3.7, 4.0),
+      labels        = c("Needs Improvement", "Average", "Good", "Excellent"),
+      include.lowest = TRUE
+    )
+  )
+
+cat("At-risk students:", sum(df$at_risk), "out of", nrow(df),
+    sprintf("(%.1f%%)\n", 100 * mean(df$at_risk)))
+```
+
+---
+
+## Exploratory Data Analysis
+
+### Summary Tables
+
+#### At-Risk Student Counts by Major and Seniority
+
+The table below identifies the concentration of at-risk students across majors and seniority levels, providing an early signal of where academic support resources may be most needed.
+
+```{r at-risk-counts}
+df %>%
+  filter(at_risk) %>%
+  count(major, seniority, name = "at_risk_count") %>%
+  arrange(major, seniority) %>%
+  datatable(
+    caption  = "Count of At-Risk Students by Major and Seniority",
+    options  = list(pageLength = 10, autoWidth = TRUE),
+    rownames = FALSE,
+    class    = "cell-border stripe"
+  )
+```
+
+#### At-Risk Rate by Major and Seniority
+
+Raw counts can be misleading when group sizes differ. The table below shows the *proportion* of at-risk students within each major–seniority combination.
+
+```{r at-risk-rate}
+df %>%
+  group_by(major, seniority) %>%
+  summarise(
+    n_students   = n(),
+    n_at_risk    = sum(at_risk),
+    pct_at_risk  = round(100 * mean(at_risk), 1),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(pct_at_risk)) %>%
+  datatable(
+    caption  = "At-Risk Rate (%) by Major and Seniority",
+    colnames = c("Major", "Seniority", "Students", "At-Risk Count", "At-Risk %"),
+    options  = list(pageLength = 10, autoWidth = TRUE),
+    rownames = FALSE,
+    class    = "cell-border stripe"
+  )
+```
+
+#### Student Enrollment Cross-Tabulation
+
+A cross-tabulation of major and seniority illustrates how enrollment is distributed across disciplines and academic years.
+
+```{r cross-tab}
+cross_tab <- table(df$major, df$seniority)
+knitr::kable(cross_tab,
+             caption = "Student Enrollment by Major and Seniority")
+```
+
+#### GPA Tier Distribution by Major
+
+The distribution of students across GPA tiers characterizes the relative performance profile of each discipline.
+
+```{r gpa-tier-counts}
+df %>%
+  count(major, gpa_tier) %>%
+  arrange(major, gpa_tier) %>%
+  knitr::kable(caption = "Count of Students by GPA Tier and Major",
+               col.names = c("Major", "GPA Tier", "Count"))
+```
+
+#### Descriptive Statistics by Major
+
+Detailed descriptive statistics for `score` and `gpa` are computed by major, providing a quantitative basis for comparing academic performance across disciplines.
+
+```{r summary-stats-major}
+summary_by_major <- df %>%
+  group_by(major) %>%
+  summarise(
+    n             = n(),
+    mean_score    = mean(score),
+    median_score  = median(score),
+    sd_score      = sd(score),
+    mean_gpa      = mean(gpa),
+    median_gpa    = median(gpa),
+    sd_gpa        = sd(gpa),
+    .groups = "drop"
+  ) %>%
+  mutate(across(where(is.numeric), ~ round(., 2)))
+
+datatable(
+  summary_by_major,
+  caption  = "Descriptive Statistics for Score and GPA by Major",
+  colnames = c("Major", "N", "Mean Score", "Median Score", "SD Score",
+               "Mean GPA", "Median GPA", "SD GPA"),
+  options  = list(pageLength = 5, autoWidth = TRUE),
+  filter   = "top",
+  rownames = FALSE,
+  class    = "cell-border stripe"
+)
+```
+
+> **Observation:** Computer Science students record the highest mean score, while Psychology students record the highest mean GPA. The interactive filters enable targeted exploration across majors.
+
+#### Score–GPA Correlation (Spearman)
+
+Because `score` and `gpa` are both performance metrics but measured on different scales, a Spearman rank correlation is used to quantify their monotonic relationship without assuming normality.
+
+```{r spearman-correlation}
+cor_result <- cor.test(df$score, df$gpa, method = "spearman", exact = FALSE)
+
+cat(sprintf(
+  "Spearman rank correlation between Score and GPA:\n  rho = %.3f\n  p-value = %.4f\n",
+  cor_result$estimate,
+  cor_result$p.value
+))
+```
+
+> A statistically significant positive correlation indicates that students who score higher on assessments also tend to have higher GPAs — though the relationship is far from perfect, confirming that the two metrics capture distinct dimensions of academic achievement.
+
+---
+
+### Data Visualizations
+
+Interactive visualizations are produced using `ggplot2` and `plotly` to examine distributional properties and relationships of the key performance variables.
+
+#### GPA and Score Distributions by Grade
+
+Box plots provide a concise view of central tendency, spread, and outliers for `gpa` and `score` across letter grades and majors.
+
+```{r boxplot-gpa-grade}
+p1 <- ggplot(df, aes(x = grade, y = gpa, fill = grade)) +
+  geom_boxplot(outlier.alpha = 0.4) +
+  labs(title = "GPA Distribution by Letter Grade",
+       x = "Grade", y = "GPA", fill = "Grade") +
+  theme_classic() +
+  theme(legend.position = "none")
+
+ggplotly(p1)
+```
+
+```{r boxplot-score-grade}
+p2 <- ggplot(df, aes(x = grade, y = score, fill = grade)) +
+  geom_boxplot(outlier.alpha = 0.4) +
+  labs(title = "Score Distribution by Letter Grade",
+       x = "Grade", y = "Score", fill = "Grade") +
+  theme_classic() +
+  theme(legend.position = "none")
+
+ggplotly(p2)
+```
+
+```{r boxplot-gpa-major}
+p3 <- ggplot(df, aes(x = major, y = gpa, fill = major)) +
+  geom_boxplot(outlier.alpha = 0.4) +
+  labs(title = "GPA Comparison Across Majors",
+       x = "Major", y = "GPA", fill = "Major") +
+  theme_classic() +
+  theme(legend.position = "none")
+
+ggplotly(p3)
+```
+
+#### Distribution of Scores by Major
+
+Faceted histograms display the shape of the score distribution within each major, making it straightforward to compare skewness, modality, and spread across disciplines simultaneously.
+
+```{r hist-score-major}
+p_hist <- ggplot(df, aes(x = score)) +
+  geom_histogram(binwidth = 5, fill = "#4C72B0", color = "white", alpha = 0.85) +
+  facet_wrap(~ major, ncol = 2) +
+  labs(title = "Distribution of Scores by Major",
+       x = "Score", y = "Count") +
+  theme_minimal()
+
+ggplotly(p_hist)
+```
+
+> **Observation:** Several majors exhibit a bimodal pattern — a cluster of high-scoring students and a separate cluster of low scorers, with relatively few students in the middle range. This may reflect divergent study outcomes or grade polarization.
+
+#### GPA Distribution by Seniority
+
+This visualization examines whether GPA shifts systematically as students advance through their academic careers — a potential signal of grade inflation, increasing academic rigor, or differential retention across year levels.
+
+```{r boxplot-gpa-seniority}
+p_box <- ggplot(df, aes(x = seniority, y = gpa, fill = seniority)) +
+  geom_boxplot(outlier.alpha = 0.4) +
+  labs(title = "GPA Distribution by Seniority",
+       x = "Seniority", y = "GPA", fill = "Seniority") +
+  scale_fill_brewer(palette = "Set2") +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+ggplotly(p_box)
+```
+
+#### Grade Distribution by Major
+
+A grouped bar chart displays the frequency of each letter grade within each major, enabling a direct comparison of grading distributions across disciplines.
+
+```{r bar-grade-major}
+p_bar <- ggplot(df, aes(x = major, fill = grade)) +
+  geom_bar(position = "dodge") +
+  labs(title = "Grade Distribution by Major",
+       x = "Major", y = "Number of Students", fill = "Grade") +
+  scale_fill_viridis_d(direction = -1) +
+  theme_minimal()
+
+ggplotly(p_bar)
+```
+
+#### Score vs. GPA by Major (Full Dataset)
+
+A scatter plot examines the bivariate relationship between `score` and `gpa`, differentiated by major. The full 1,000-observation dataset is used here.
+
+```{r scatter-score-gpa}
+p_scatter <- ggplot(
+  df,
+  aes(
+    x    = score,
+    y    = gpa,
+    color = major,
+    text  = paste0("Major: ", major,
+                   "<br>Score: ", score,
+                   "<br>GPA: ", gpa,
+                   "<br>Grade: ", grade,
+                   "<br>Seniority: ", seniority)
+  )
+) +
+  geom_point(alpha = 0.45, size = 1.8) +
+  geom_smooth(method = "lm", se = FALSE, linewidth = 0.7) +
+  labs(title = "Score vs. GPA by Major",
+       x = "Score", y = "GPA", color = "Major") +
+  scale_color_viridis_d() +
+  theme_minimal()
+
+ggplotly(p_scatter, tooltip = "text")
+```
+
+> **Observation:** A positive association between `score` and `gpa` is visible across all majors, consistent with the significant Spearman correlation reported above. Trend lines per major reveal subtle differences in the slope of this relationship — Economics and CS show a steeper positive gradient than Psychology.
+
+#### At-Risk Rate Heatmap by Major and Seniority
+
+The heatmap below visualizes the proportion of at-risk students in each major–seniority cell, providing an at-a-glance view of where academic support may have the greatest impact.
+
+```{r heatmap-at-risk}
+at_risk_heat <- df %>%
+  group_by(major, seniority) %>%
+  summarise(pct_at_risk = round(100 * mean(at_risk), 1), .groups = "drop")
+
+p_heat <- ggplot(at_risk_heat,
+                 aes(x = seniority, y = major, fill = pct_at_risk,
+                     text = paste0(major, " — ", seniority,
+                                   "<br>At-Risk Rate: ", pct_at_risk, "%"))) +
+  geom_tile(color = "white", linewidth = 0.5) +
+  geom_text(aes(label = paste0(pct_at_risk, "%")), size = 3.5, color = "white") +
+  scale_fill_gradient(low = "#FFF3CD", high = "#C0392B",
+                      name = "At-Risk %") +
+  labs(title = "At-Risk Rate (%) by Major and Seniority",
+       x = "Seniority", y = "Major") +
+  theme_minimal() +
+  theme(axis.text = element_text(size = 11))
+
+ggplotly(p_heat, tooltip = "text")
+```
+
+---
+
+## Conclusion
+
+This analysis delivered a structured examination of the `moody2022` dataset, surfacing meaningful variation in academic performance across student majors, seniority levels, and grade distributions. Key takeaways include:
+
+- **CS students score highest on average** while **Psychology students maintain the highest average GPA**, suggesting the two metrics capture different dimensions of academic achievement — a finding confirmed by the Spearman rank correlation.
+- **At-risk students are not uniformly distributed**: the heatmap reveals specific major–seniority combinations where academic intervention would be most targeted and impactful.
+- **Score distributions are bimodal in several majors**, indicating a polarized student body with distinct high-performing and struggling segments rather than a normal bell curve.
+- **GPA is largely stable across seniority levels**, providing no strong evidence of systematic grade inflation or deflation as students advance.
+
+These findings offer a data-driven foundation for academic advisors and department heads seeking to understand performance trends, allocate tutoring resources effectively, and design early-warning systems for at-risk student identification.
