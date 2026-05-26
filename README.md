@@ -171,13 +171,3 @@ install.packages(c("tidyverse", "knitr", "DT", "plotly", "janitor"))
 | **janitor** | Column name standardization and tabyl |
 | **DT** | Interactive HTML data tables |
 | **knitr** | Report generation and table formatting |
-
----
-
-## Author
-
-**Thuc Cao**  
-B.S. Data Science, Minor in Economics & Statistics — Rutgers University (Expected May 2026)  
-Data Scientist Intern — Hitachi Vantara Digital Services
-
-[LinkedIn](https://linkedin.com/in/thucduycao) · [GitHub](https://github.com/DuyThucCao) · duythuccao@outlook.com
